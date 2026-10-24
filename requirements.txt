@@ -1,0 +1,6 @@
+# PluginReaper dependencies
+# Core parser works with stdlib only.
+# Optional acceleration / full coverage:
+
+zstandard>=0.22.0
+lz4>=4.3.0

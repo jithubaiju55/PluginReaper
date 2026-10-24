@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# PluginReaper runtime output
+output/
+recovered/
+*_modded.rbxmx
+*_plugin.rbxmx
+*.bc
+
+# Local tool binaries (user-supplied decompilers)
+tools/*
+!tools/.gitkeep
+
+# Test / temp
+tmp/
+temp/
+*.log
+.cache/
+
+# Secrets / local config (if any later)
+.env
+.env.*
+*.local
