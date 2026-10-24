@@ -31,6 +31,14 @@ from core.search import search_tree, scan_patterns
 from core.project_gen import generate_rojo_project, generate_readme, generate_script_index
 from core.prettier import clean_tree
 from core.rebuild import rebuild_plugin
+from core.diffmap import diff_trees, write_diff_report, snapshot_tree
+from core.api_index import write_api_index
+from core.safe_patch import inject_toolbar_button, inject_settings_helpers, inject_dock_widget, list_snippets
+from core.doctor import doctor_tree, write_doctor_report
+from core.watch import watch_tree
+from core.malware_scan import scan_raw_file, scan_tree, scan_plugin, write_malware_report
+from core.downloader import download_plugin, extract_asset_id
+
 from utils.paths import (
     find_plugin_rbxm,
     list_installed_plugins,
@@ -102,6 +110,25 @@ def cmd_extract(args: argparse.Namespace) -> int:
     }
     generate_readme(result, meta)
     print("[+] Rojo project + script index written")
+    try:
+        write_api_index(result)
+        print("[+] API index written")
+    except Exception as e:
+        print(f"[*] API index skipped: {e}")
+    try:
+        issues = doctor_tree(result)
+        write_doctor_report(issues, result)
+        print(f"[+] Doctor: {sum(1 for i in issues if i.severity!="info")} issue(s)")
+    except Exception as e:
+        print(f"[*] Doctor skipped: {e}")
+    # auto snapshot for later diff
+    try:
+        snap = result.parent / f"{result.name}_snapshot"
+        if not snap.exists():
+            snapshot_tree(result, snap)
+            print(f"[+] Snapshot → {snap.name} (use --diff later)")
+    except Exception:
+        pass
 
     if args.beautify:
         n = clean_tree(result, strip_header=True)
@@ -197,6 +224,155 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
     print("    Or in Studio: right-click model → Save as Local Plugin / Publish as Plugin")
     return 0
 
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    root = Path(args.doctor_dir)
+    if not root.is_dir():
+        print(f"[!] Not a directory: {root}")
+        return 1
+    issues = doctor_tree(root)
+    report = write_doctor_report(issues, root)
+    errors = sum(1 for i in issues if i.severity == "error")
+    warns = sum(1 for i in issues if i.severity == "warn")
+    print(f"[+] Doctor → {report.name}  (errors={errors} warns={warns})")
+    for i in issues[:20]:
+        print(f"  [{i.severity}] {i.path}: {i.message}")
+    if len(issues) > 20:
+        print(f"  ... +{len(issues)-20} more")
+    return 1 if errors else 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    a, b = Path(args.diff_a), Path(args.diff_b)
+    if not a.is_dir() or not b.is_dir():
+        print("[!] Both --diff paths must be directories")
+        return 1
+    diffs = diff_trees(a, b)
+    out = Path(args.output) if args.output else b
+    report = write_diff_report(diffs, out)
+    mod = sum(1 for d in diffs if d.status == "modified")
+    add = sum(1 for d in diffs if d.status == "added")
+    rem = sum(1 for d in diffs if d.status == "removed")
+    print(f"[+] Diff → {report}")
+    print(f"    modified={mod} added={add} removed={rem}")
+    return 0
+
+
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    src = Path(args.snapshot_dir)
+    if not src.is_dir():
+        print(f"[!] Not a directory: {src}")
+        return 1
+    dest = Path(args.output) if args.output else src.parent / f"{src.name}_snapshot"
+    snapshot_tree(src, dest)
+    print(f"[+] Snapshot scripts → {dest.resolve()}")
+    return 0
+
+
+def cmd_api_index(args: argparse.Namespace) -> int:
+    root = Path(args.api_dir)
+    if not root.is_dir():
+        print(f"[!] Not a directory: {root}")
+        return 1
+    path = write_api_index(root)
+    print(f"[+] API index → {path}")
+    return 0
+
+
+def cmd_patch(args: argparse.Namespace) -> int:
+    root = Path(args.patch_dir)
+    if not root.is_dir():
+        print(f"[!] Not a directory: {root}")
+        return 1
+    kind = (args.patch_kind or "toolbar").lower()
+    target = None
+    if kind in ("toolbar", "button"):
+        target = inject_toolbar_button(
+            root,
+            toolbar_name=args.toolbar_name or "MyTools",
+            button_name=args.button_name or "MyFeature",
+            tooltip=args.tooltip or "Custom feature",
+        )
+    elif kind in ("settings", "setting"):
+        target = inject_settings_helpers(root)
+    elif kind in ("dock", "widget"):
+        target = inject_dock_widget(root, title=args.tooltip or "Custom Panel")
+    else:
+        print("[!] Unknown patch kind. Use: toolbar | settings | dock")
+        print("    Available:", list_snippets())
+        return 1
+    if target:
+        print(f"[+] Patched {kind} → {target}")
+        print("    Edit the TODO section, then --rebuild")
+    else:
+        print("[!] No entry script found to patch")
+        return 1
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    root = Path(args.watch_dir)
+    if not root.is_dir():
+        print(f"[!] Not a directory: {root}")
+        return 1
+
+    def on_change(r: Path) -> None:
+        issues = doctor_tree(r)
+        write_doctor_report(issues, r)
+        errors = sum(1 for i in issues if i.severity == "error")
+        warns = sum(1 for i in issues if i.severity == "warn")
+        print(f"[watch] doctor: errors={errors} warns={warns} → _doctor.txt")
+
+    watch_tree(root, on_change, interval=float(args.interval or 1.0))
+    return 0
+
+
+
+def cmd_malware(args: argparse.Namespace) -> int:
+    target = Path(args.malware_target)
+    out = Path(args.output) if args.output else (target.parent if target.is_file() else target)
+    if target.is_file():
+        tree = Path(args.tree) if getattr(args, "tree", None) else None
+        print(f"[*] Malware scan (raw) → {target.name}")
+        report = scan_plugin(target, also_tree=tree)
+    elif target.is_dir():
+        print(f"[*] Malware scan (tree) → {target}")
+        report = scan_tree(target)
+    else:
+        print(f"[!] Not found: {target}")
+        return 1
+    path = write_malware_report(report, out if out.is_dir() else out.parent)
+    print(f"[+] Verdict : {report.verdict.upper()}  (score {report.score}/100)")
+    print(f"[+] Report  → {path}")
+    crit = [f for f in report.findings if f.severity == "critical"]
+    high = [f for f in report.findings if f.severity == "high"]
+    for f in (crit + high)[:15]:
+        print(f"  [{f.severity}] {f.title} @ {f.location}")
+    if report.verdict in ("malicious", "suspicious"):
+        print("[!] Do not install this plugin until you review the report.")
+        return 2
+    return 0
+
+
+def cmd_download(args: argparse.Namespace) -> int:
+    out_dir = Path(args.output) if args.output else Path("downloads")
+    print(f"[*] Downloading for local scan only (no execute)...")
+    try:
+        path, note = download_plugin(args.download_url, out_dir)
+    except Exception as e:
+        print(f"[!] {e}")
+        return 1
+    print(f"[+] Saved → {path}")
+    print(f"    {note}")
+    # auto malware raw scan
+    report = scan_raw_file(path)
+    write_malware_report(report, path.parent)
+    print(f"[+] Quick scan verdict: {report.verdict.upper()} ({report.score}/100)")
+    print(f"    Full deep scan: extract then --malware ./recovered")
+    print(f"    Or: python plugin_reaper.py --malware \"{path}\"")
+    return 0 if report.verdict != "malicious" else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="PluginReaper v2 — peak Roblox plugin reverse engineering",
@@ -211,6 +387,17 @@ def main() -> int:
     parser.add_argument("--from-id", dest="asset_id", help="Extract from InstalledPlugins by asset ID")
     parser.add_argument("--list-installed", action="store_true")
     parser.add_argument("--scan-plugins", action="store_true", help="List local plugin locations")
+    parser.add_argument("--doctor", dest="doctor_dir", help="Health-check extracted/edited tree")
+    parser.add_argument("--diff", nargs=2, metavar=("ORIG", "EDITED"), dest="diff_paths", help="Diff two trees")
+    parser.add_argument("--snapshot", dest="snapshot_dir", help="Snapshot scripts for later --diff")
+    parser.add_argument("--api-index", dest="api_dir", help="Build service/require/API index")
+    parser.add_argument("--patch", dest="patch_dir", help="Inject common feature stub into entry script")
+    parser.add_argument("--patch-kind", default="toolbar", help="toolbar | settings | dock")
+    parser.add_argument("--toolbar-name", default="MyTools")
+    parser.add_argument("--button-name", default="MyFeature")
+    parser.add_argument("--tooltip", default="Custom feature")
+    parser.add_argument("--watch", dest="watch_dir", help="Watch tree and re-run doctor on change")
+    parser.add_argument("--interval", type=float, default=1.0, help="Watch poll interval seconds")
     parser.add_argument("--rebuild", dest="rebuild_dir", help="Rebuild extracted tree back into .rbxmx plugin")
     parser.add_argument("--scan", dest="scan_dir", help="Security pattern scan on extracted tree")
     parser.add_argument("--search", dest="search_dir", help="Directory to search")

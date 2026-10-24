@@ -1,291 +1,292 @@
 # PluginReaper
 
-> Reverse engineer any Roblox plugin. Edit the source. Ship it back as a plugin.
+> **Reverse engineer any Roblox plugin. Scan it for malware. Edit the source. Ship it back.**
 
-PluginReaper turns a `.rbxm` / `.rbxmx` plugin into a clean developer folder tree, analyzes it, lets you search and modify it, then rebuilds a Studio-loadable plugin. Built for developers who like a plugin but wish it had one more feature — get the source, change it, put it back.
+PluginReaper is the full loop for developers who like a plugin but wish it did more — and for anyone who installs free/reuploaded plugins and wants to know if they’re safe.
+
+**Download / open → malware scan → extract → analyze → edit / patch → doctor → rebuild → install**
+
+Everything runs locally. Nothing is executed for you. You stay in control.
 
 ---
 
-## Why this exists
+## Contents
 
-You install a plugin. It’s close to perfect, but not quite. You want:
+- [Why PluginReaper](#why-pluginreaper)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Command reference](#command-reference)
+- [Malware scanner](#malware-scanner)
+- [Download for scanning](#download-for-scanning)
+- [Extract output](#extract-output)
+- [Developer workflow](#developer-workflow)
+- [Patch examples](#patch-examples)
+- [Analysis, doctor, and diff](#analysis-doctor-and-diff)
+- [Supported formats](#supported-formats)
+- [Project layout](#project-layout)
+- [Tips](#tips)
+- [Limitations](#limitations)
+- [License and intent](#license-and-intent)
 
-- a missing hotkey
-- a cleaner UI flow
-- a fix for a bug the author never shipped
-- to learn how a complex tool is structured
+## Why PluginReaper
 
-Studio does not hand you the source. Protected / compiled plugins only expose bytecode. PluginReaper closes that gap:
+Two real problems:
 
-- Extract full hierarchy + script sources (XML and binary).
-- Analyze entry points, requires, services, risk flags.
-- Search / scan the tree for anything interesting.
-- Edit the `.luau` files like a normal project.
-- Rebuild a `.rbxmx` you can install or publish.
+| Problem | What you need |
+| --- | --- |
+| **Almost-perfect plugins** — you want one extra button, a fix, or a setting. Studio won’t give you the source. | Extract the plugin, make your change, and rebuild it. |
+| **Dangerous free plugins** — YouTube “paid plugin free” reuploads often hide webhooks, `loadstring(HttpGet)`, clipboard stealers, or obfuscated loaders. They’re hard to spot by eye. | Scan the raw file and extracted source, then review a clear verdict. |
 
-> **No network calls.** Everything stays on your machine.
+PluginReaper addresses both:
+
+| Problem | PluginReaper solution |
+| --- | --- |
+| No source | Extract `.rbxm` / `.rbxmx` into a clean developer tree |
+| Hidden malware | Raw file scan + full source scan with clear verdict |
+| Slow edits | One-command patches (toolbar, settings, dock) |
+| Fear of breaking install | Doctor + diff before rebuild |
+| Shipping your fix | Rebuild to a Studio-loadable `.rbxmx` |
 
 ## Install
 
 ```powershell
-# from the PluginReaper folder
-
 pip install -r requirements.txt
 ```
 
-> **Optional (recommended for compressed binary plugins):** `pip install zstandard lz4`
->
-> **Optional (full bytecode → source recovery):** drop a Luau decompiler binary (`luau-decompiler`, Oracle, etc.) into `tools/` or on your `PATH`.
->
-> **Requirements:** Python 3.10+
+**Optional — compressed binary plugins**
+
+```powershell
+pip install zstandard lz4
+```
+
+**Optional — bytecode → source:** put a Luau decompiler in `tools/` or on `PATH`.
+
+**Requirements:** Python 3.10+
 
 ## Quick start
 
-```powershell
-# 1) Extract a plugin (XML or binary)
-python .\plugin_reaper.py "C:\path\to\Eclipse Animator.rbxmx" -o .\recovered --clean --beautify
+### Check a plugin before installing
 
-# 2) Read the analysis
+```powershell
+# Scan a file without extracting
+python .\plugin_reaper.py --malware "C:\Downloads\free_plugin.rbxmx"
+
+# Download an asset for local scanning only (never executes)
+python .\plugin_reaper.py --download 1234567890 -o .\downloads
+python .\plugin_reaper.py --download "https://example.com/plugin.rbxmx" -o .\downloads
+```
+
+### Extract, improve, and ship
+
+```powershell
+# Extract, analyze, and scan
+python .\plugin_reaper.py "Eclipse Animator.rbxmx" -o .\recovered --clean --beautify
 notepad .\recovered_analysis.txt
+notepad .\recovered_malware_scan.txt
 
-# 3) Edit any .luau file under .\recovered\
+# Add the feature you wished existed
+python .\plugin_reaper.py --patch .\recovered --patch-kind toolbar --button-name "ExportCSV"
 
-# 4) Rebuild into a new plugin
-python .\plugin_reaper.py --rebuild .\recovered -o .\EclipseAnimator_modded.rbxmx
+# Health check
+python .\plugin_reaper.py --doctor .\recovered
 
-# 5) Install
-
-# Copy EclipseAnimator_modded.rbxmx into:
-# %LOCALAPPDATA%\Roblox\Plugins\
-
-# Restart Studio, or use right-click → Save as Local Plugin / Publish as Plugin
+# Rebuild the plugin
+python .\plugin_reaper.py --rebuild .\recovered -o .\MyPlugin_modded.rbxmx
 ```
 
-## Commands
+Copy `MyPlugin_modded.rbxmx` to `%LOCALAPPDATA%\Roblox\Plugins\` or use **Studio → Save as Local Plugin**.
 
-| Command | Purpose |
+## Command reference
+
+### Core
+
+| Command | What it does |
 | --- | --- |
-| <code>python plugin_reaper.py &lt;file.rbxm&#124;rbxmx&gt; -o ./out</code> | Extract plugin → clean source tree |
-| `--clean` | Wipe output folder before extract |
-| `--beautify` | Strip extraction headers, normalize whitespace |
-| `--decompile` | Attempt bytecode recovery (needs external decompiler for full source) |
-| `--from-id <assetId>` | Extract from local InstalledPlugins cache |
-| `--list-installed` | List plugins already cached by Studio |
-| `--rebuild ./recovered -o ./out.rbxmx` | Turn edited tree back into a loadable plugin |
-| `--scan ./recovered` | Security / behavior pattern scan |
-| `--search ./recovered "query"` | Full-text search |
-| <code>--search ./recovered "HttpService&#124;loadstring" --regex</code> | Regex search |
+| `plugin_reaper.py <file> -o ./out` | Extract plugin → source tree |
+| `--clean` | Wipe output dir first |
+| `--beautify` | Clean headers / whitespace |
+| `--decompile` | Bytecode recovery pass |
+| `--from-id <assetId>` | Extract from Studio InstalledPlugins cache |
+| `--list-installed` | List cached plugins |
+| `--rebuild ./out -o plugin.rbxmx` | Edited tree → installable plugin |
 
-## Extract examples
+### Security
+
+| Command | What it does |
+| --- | --- |
+| <code>--malware &lt;file&#124;folder&gt;</code> | Malware / abuse scan (raw and/or source) |
+| `--malware file --tree ./out` | Combine raw file + extracted tree |
+| <code>--download &lt;url&#124;id&gt; -o ./dir</code> | Download for scan only (no execute) |
+
+### Developer speed
+
+| Command | What it does |
+| --- | --- |
+| `--patch ./out --patch-kind toolbar` | Inject toolbar button stub |
+| `--patch-kind settings` | Inject GetSetting/SetSetting helpers |
+| `--patch-kind dock` | Inject dock widget + frame stub |
+| `--doctor ./out` | Health check before rebuild |
+| `--api-index ./out` | Services, plugin APIs, requires index |
+| `--snapshot ./out` | Snapshot scripts for later diff |
+| `--diff ./snap ./out` | Show what you changed |
+| `--search ./out "query"` | Full-text search |
+| `--search ./out "pattern" --regex` | Regex search |
+| `--scan ./out` | Behavior pattern scan |
+| `--watch ./out` | Re-run doctor on file changes |
+
+## Malware scanner
+
+Built for the exact threat model: reuploaded paid plugins with extra malicious code.
+
+### What it detects
+
+| Severity | Examples |
+| --- | --- |
+| **Critical** | Discord webhooks, `loadstring(HttpGet)`, clipboard steal APIs |
+| **High** | `RequestAsync` exfil, `getfenv` / `setfenv`, `writefile`, debug abuse, heavy obfuscation |
+| **Medium** | External HTTP hosts, numeric packers, teleport / purchase spam patterns |
+| **Low / info** | Normal plugin APIs (toolbar, settings) |
+
+### Scan modes
+
+| Mode | Description |
+| --- | --- |
+| **Raw** | Scans `.rbxm` / `.rbxmx` bytes and embedded text without full reverse engineering. Fast pre-check. |
+| **Tree** | Scans every extracted `.luau` after RE. Deep. |
+| **Both** | Used when you pass `--malware file --tree ./recovered`, and automatically on extract. |
+
+### Verdicts
+
+| Verdict | Meaning |
+| --- | --- |
+| `clean` | No strong signals |
+| `review` | Medium signals — read the report |
+| `suspicious` | High-risk patterns — do not install blindly |
+| `malicious` | Critical indicators (webhook / remote loader / exfil) |
+
+Reports: `_malware_scan.txt`, `_malware_scan.json`.
+
+> **Important:** A clean verdict is not a guarantee. Obfuscation evolves. Always treat random free reuploads as untrusted until you understand the source.
+
+## Download for scanning
 
 ```powershell
-python .\plugin_reaper.py ".\MyPlugin.rbxm" -o .\out --clean --beautify
-python .\plugin_reaper.py ".\MyPlugin.rbxmx" -o .\out --clean
-python .\plugin_reaper.py --from-id 1234567890 -o .\that_plugin
+python .\plugin_reaper.py --download 1234567890 -o .\downloads
+python .\plugin_reaper.py --download "https://..." -o .\downloads
 ```
 
-## Rebuild example
+- Saves the file locally
+- Runs a quick raw malware scan
+- Does not execute plugin code
+- Private/paid assets may fail on public assetdelivery — place the file manually and use `--malware` instead
 
-```powershell
-python .\plugin_reaper.py --rebuild .\out -o .\MyPlugin_v2.rbxmx
-```
+Use this when someone sends a “free plugin” link and you want a verdict before Studio ever sees it.
 
-## Search / scan examples
-
-```powershell
-python .\plugin_reaper.py --scan .\out
-python .\plugin_reaper.py --search .\out "loadstring"
-python .\plugin_reaper.py --search .\out "FireServer|InvokeServer" --regex
-python .\plugin_reaper.py --search .\out "plugin:CreateToolbar"
-```
-
-## Output layout
-
-After a successful extract:
+## Extract output
 
 ```text
 recovered/
-├── <PluginRoot>/ # original hierarchy
-│   ├── init.server.luau # root Script (if it had children)
-│   ├── container/
-│   │   └── core/
-│   │       ├── launcher.luau
-│   │       └── ...
-│   └── ...
-├── _plugin_meta.json # instance counts, format, metadata
-├── _extraction_summary.txt # extract stats
-├── _analysis.txt # entry points, risk, require graph (human)
-├── _analysis.json # same data (machine-readable)
-├── _script_index.csv # every script path + line count
-├── default.project.json # Rojo project scaffold
-└── README_RECOVERED.md # short notes for the recovered tree
+├── <PluginRoot>/
+│   ├── init.server.luau
+│   └── ... hierarchy ...
+├── _plugin_meta.json
+├── _extraction_summary.txt
+├── _analysis.txt / _analysis.json       # entry points, risk, require graph
+├── _malware_scan.txt / .json            # security verdict
+├── _doctor.txt                          # health before rebuild
+├── _api_index.txt / .json               # GetService + plugin APIs
+├── _script_index.csv
+├── default.project.json                 # Rojo
+└── README_RECOVERED.md
 ```
 
-After `--scan`:
+Script suffixes:
 
-```text
-└── _scan_results.json # HTTP, loadstring, remotes, etc.
-```
-
-## Script naming
-
-| File suffix | Roblox class |
+| Suffix | Class |
 | --- | --- |
 | `.server.luau` | Script |
 | `.client.luau` | LocalScript |
 | `.luau` | ModuleScript |
-| `.core.luau` | CoreScript |
 
-Folders keep structure. Scripts that contained children in the original plugin become a folder with `init.*.luau` plus nested modules — so `require(script.container.core.launcher)` still makes sense after extract and after rebuild.
+## Developer workflow
 
-## Full developer loop
+### The life-saver path
 
-```mermaid
-flowchart TD
-    A[".rbxm/.rbxmx<br/>(plugin)"] -->|extract| B["recovered/ tree<br/>+ _analysis.txt"]
-    B -->|edit .luau<br/>add features| C["modified tree"]
-    C -->|--rebuild| D[".rbxmx plugin<br/>(your build)"]
-    D -->|install| E["Studio / Plugins/"]
-```
+1. **Extract** — also runs malware scan, doctor, API index, and snapshot.
+2. **Review** — read `_malware_scan.txt` and `_analysis.txt`.
+3. **Modify** — use `--patch` or hand-edit `.luau` files.
+4. **Verify** — run `--doctor` and compare with `--diff` against the snapshot.
+5. **Rebuild** — create the `.rbxmx`.
+6. **Install** — put it in the Plugins folder or publish as a local plugin.
 
-1. Extract the plugin you care about.
-2. Open `_analysis.txt` — see entry points and anything flagged.
-3. Change the sources (new toolbar button, fix, refactor).
-4. Rebuild.
-5. Drop the new `.rbxmx` into your Plugins folder or publish it as your own local/private plugin.
-
-This is the “I like this plugin but I wish it had X” workflow.
-
-## Analysis (`_analysis.txt`)
-
-Every extract runs a deep pass over all scripts:
-
-- **Entry points** — names like init / launcher / main, root Scripts, Plugin API usage
-- **Require graph** — who requires whom (sample)
-- **Service usage** — `GetService("...")` frequency
-- **Risk / behavior flags**
-
-| Flag | Meaning |
-| --- | --- |
-| HTTP | `HttpService` / `RequestAsync` / `HttpGet`-style usage |
-| LOADSTRING | Dynamic code execution |
-| ENV_TAMPER | `getfenv` / `setfenv` / metatable tricks |
-| REMOTE | `RemoteEvent` / `FireServer` / `OnServerEvent`, etc. |
-| OBFUSC_HEX / OBFUSC_STRINGS / OBFUSC_NUMTABLE | Obfuscation signals |
-| MINIFIED | Very long lines / dense code |
-| PLUGIN_API | Normal plugin toolbar / dock widget APIs |
-| NO_SOURCE | Bytecode-only or empty |
-
-High-risk scripts (score ≥ 40) are listed first so you can inspect them before trusting or shipping a rebuild.
-
-## Pattern scan (`--scan`)
-
-One-shot pass for common behaviors:
-
-- HTTP / loadstring / getfenv
-- Remotes (FireServer, InvokeServer, …)
-- Marketplace / purchase prompts
-- TeleportService
-- DataStore
-- plugin:SetSetting / GetSetting
-
-Results land in `_scan_results.json` and are printed to the console.
-
-## Rebuild details
-
-`--rebuild` walks the extracted tree and emits a valid Roblox XML model (`.rbxmx`):
-
-- Respects `.server.luau` / `.client.luau` / `.luau` suffixes
-- Uses `_instance.json` when present (class + name from original extract)
-- Root Script + children → single Script item with nested Items
-- Source written as ProtectedString with CDATA (handles `]]>` safely)
-- Skips meta files (`_analysis.*`, `_plugin_meta.json`, Rojo files, etc.)
-
-### Install options
-
-**Local Plugins folder**
-
-```text
-%LOCALAPPDATA%\Roblox\Plugins\
-```
-
-Restart Studio (or refresh plugins).
-
-**From Studio**
-
-Insert the `.rbxmx` into a place → right-click the root → Save as Local Plugin or Publish as Plugin.
-
-**Rojo**
-
-Use `default.project.json` if you prefer a Rojo serve/sync workflow while editing.
-
-## Finding plugins on disk
-
-| Location | Path (Windows) |
-| --- | --- |
-| Installed from Creator Store | `%LOCALAPPDATA%\Roblox\<UserId>\InstalledPlugins\<AssetId>\<Version>\Plugin.rbxm` |
-| Local plugins | `%LOCALAPPDATA%\Roblox\Plugins\` |
-| Built-in Studio plugins | `%LOCALAPPDATA%\Roblox\Versions\<version>\BuiltInPlugins\` |
+## Patch examples
 
 ```powershell
-python .\plugin_reaper.py --list-installed
+python .\plugin_reaper.py --patch .\recovered --patch-kind toolbar --button-name "MyFeature" --tooltip "Does the thing"
+python .\plugin_reaper.py --patch .\recovered --patch-kind settings
+python .\plugin_reaper.py --patch .\recovered --patch-kind dock
 ```
 
-If the plugin is already installed in Studio, `--from-id <assetId>` pulls it from the cache without hunting paths.
+Stubs are appended to the entry script (`init.server.luau` when present). Fill in the TODO section, then rebuild.
 
-## Project structure
+## Analysis, doctor, and diff
 
-```text
-PluginReaper/
-├── plugin_reaper.py # CLI entry
-├── requirements.txt
-├── README.md
-├── core/
-│   ├── rbxm_parser.py # Binary .rbxm parser
-│   ├── rbxmx_parser.py # XML .rbxmx parser
-│   ├── extractor.py # Hierarchy → folders + .luau
-│   ├── analyzer.py # Entry points, risk, require graph
-│   ├── search.py # Full-text + pattern scan
-│   ├── decompiler.py # Bytecode recovery bridge
-│   ├── rebuild.py # Tree → .rbxmx plugin
-│   ├── project_gen.py # Rojo + script index
-│   └── prettier.py # Source cleanup
-├── utils/
-│   └── paths.py # Studio cache path helpers
-├── tools/ # Optional: place external decompilers here
-└── docs/
-    └── ARCHITECTURE.md
-```
+- **Analysis** ranks entry points, builds a require graph sample, maps `GetService` usage, and flags HTTP / loadstring / obfuscation / remotes.
+- **Doctor** checks for empty scripts, missing entry points, unresolved `require(script...)` paths, and oversized files before you rebuild.
+- **Diff** compares a snapshot to your current tree so you only ship intentional changes.
 
-## Formats supported
+## Supported formats
 
 | Input | Support |
 | --- | --- |
-| `.rbxmx` (XML) | Native — full Source / ProtectedString / hierarchy |
-| `.rbxm` (binary) | Native — INST / PROP / PRNT, LZ4 + ZSTD when libs installed |
-| Compiled / Source stripped | Hierarchy always; bytecode saved as `.bc`; recovery via `--decompile` + external tool |
+| `.rbxmx` (XML) | Native |
+| `.rbxm` (binary) | Native (LZ4/ZSTD with optional deps) |
+| Source-stripped / bytecode | Hierarchy always; `.bc` dump; external decompiler via `--decompile` |
 
-Auto-detection: if the file starts with `<` / `<roblox`, XML path is used; if `<roblox!`, binary path is used.
+## Project layout
+
+```text
+PluginReaper/
+├── plugin_reaper.py
+├── requirements.txt
+├── README.md
+├── LICENSE
+├── .gitignore
+├── core/
+│   ├── rbxm_parser.py / rbxmx_parser.py
+│   ├── extractor.py / rebuild.py
+│   ├── analyzer.py / search.py / decompiler.py
+│   ├── malware_scan.py / downloader.py
+│   ├── doctor.py / diffmap.py / api_index.py
+│   ├── safe_patch.py / watch.py
+│   └── project_gen.py / prettier.py
+├── utils/paths.py
+└── tools/ # optional decompilers
+```
 
 ## Tips
 
-- Always open `_analysis.txt` before editing a large plugin (hundreds of scripts).
-- Use `--scan` before you rebuild and install anything you did not author.
-- Prefer `--beautify` on extract so diffs and edits are cleaner.
-- Keep a copy of the original `.rbxmx` / `.rbxm` so you can re-extract if a rebuild needs a fresh base.
-- For binary plugins that only ship bytecode, install a real Luau decompiler under `tools/` and re-run with `--decompile` for better recovery.
+- Run `--malware` on any plugin from a random YouTube/Discord link before installing.
+- Prefer extract + read `_malware_scan.txt` + `_analysis.txt` before editing.
+- Use `--patch` for the common “one more button” request, then edit the stub.
+- Always run `--doctor` after large edits.
+- Keep the original file; re-extract if a rebuild goes wrong.
+- A clean verdict does not mean you have permission to redistribute someone else’s work.
 
 ## Limitations
 
-- Rebuild targets XML `.rbxmx` (Studio accepts it as a plugin). Binary `.rbxm` write is not implemented.
-- Complex non-script properties (CFrames, full UI trees, meshes) are not fully re-serialized from the folder tree; the rebuild path is optimized for script-centric plugins (the common case for tools you want to modify).
-- Bytecode decompilation quality depends on the external tool you provide; without one, PluginReaper writes inspection reports, not full source.
-- Does not execute plugin code. Safe offline inspection only.
+- Rebuild writes `.rbxmx` (XML) — Studio accepts it as a plugin; binary write is not implemented.
+- Rebuild is optimized for script-centric plugins (UI/value trees are not fully re-serialized).
+- Malware scan is signature/heuristic-based — novel obfuscation can evade it.
+- Download depends on public asset URLs; many paid assets won’t fetch without your own copy.
+- Bytecode decompilation quality depends on the external tool you provide.
 
-## License / intent
+## License and intent
 
-PluginReaper is a local reverse-engineering and development aid. Use it on plugins you own, have installed, or have the right to study. The extract → edit → rebuild loop is for learning and improving tools in your own workflow — not for redistributing someone else’s work as your own without permission.
+**MIT** — see `LICENSE`.
+
+PluginReaper is a local RE, security-review, and development aid. Use it on plugins you have the right to inspect. The malware scanner exists so you can refuse bad files — not so you can redistribute cracked paid plugins. Respect authors and Roblox ToS.
 
 ---
 
-*PluginReaper v2 — extract, understand, improve, ship.*
+*PluginReaper — extract, scan, improve, ship.*
